@@ -101,29 +101,14 @@ export default function Home() {
 function LoginScreen({ onSubmit, error, loading }: { onSubmit: (e: FormEvent<HTMLFormElement>) => void; error: string; loading: boolean }) {
   return (
     <main className="login-page">
-      <section className="login-intro">
-        <div className="login-brand"><span className="brand-mark large"><BookOpen size={28} /></span><b>기록담</b></div>
-        <div className="intro-copy">
-          <span className="eyebrow">나의 성장을 기록하는 공간</span>
-          <h1>차곡차곡 쌓인<br /><em>나의 이야기</em>를 만나보세요.</h1>
-          <p>학생은 자신의 기록을 안전하게 확인하고,<br />교사는 모든 기록을 한곳에서 관리할 수 있습니다.</p>
-        </div>
-        <div className="paper-stack" aria-hidden="true">
-          <div className="paper paper-back" />
-          <div className="paper paper-front"><span className="paper-pin" /><small>STUDENT RECORD</small><strong>오늘의 기록이<br />내일의 가능성이 됩니다.</strong><div className="paper-lines"><i /><i /><i /><i /></div><span className="paper-stamp">기록담</span></div>
-        </div>
-        <small className="copyright">© 기록담. 학생의 소중한 기록을 안전하게 보관합니다.</small>
-      </section>
       <section className="login-panel">
+        <div className="login-brand"><span className="brand-mark"><BookOpen size={20} /></span><b>기록담</b></div>
         <form className="login-card" onSubmit={onSubmit}>
-          <span className="eyebrow">WELCOME BACK</span>
-          <h2>기록을 만나러 갈까요?</h2>
-          <p>학교에서 안내받은 이름과 코드를 입력해 주세요.</p>
+          <h1>로그인</h1>
           <label>이름<input name="name" autoComplete="name" required placeholder="이름을 입력하세요" /></label>
           <label>입장 코드<input name="code" autoComplete="current-password" required placeholder="영문과 숫자 조합" /></label>
           {error && <div className="form-error">{error}</div>}
-          <button className="primary-button login-submit" disabled={loading}>{loading ? "확인 중…" : "내 기록 만나기"}<ChevronRight size={18} /></button>
-          <div className="safe-note"><ShieldCheck size={17} /><span><b>안전하게 보호되고 있어요</b><small>입력한 정보는 본인 확인에만 사용됩니다.</small></span></div>
+          <button className="primary-button login-submit" disabled={loading}>{loading ? "확인 중…" : "로그인"}</button>
         </form>
       </section>
     </main>
