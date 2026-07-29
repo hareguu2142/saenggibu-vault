@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { randomToken, requireSession, sha256 } from "./helpers";
+import { randomToken, sha256 } from "./helpers";
 
 export const login = mutation({
   args: { name: v.string(), code: v.string() },
@@ -18,14 +18,19 @@ export const login = mutation({
       studentId = student._id;
     }
     const token = randomToken();
-    await ctx.db.insert("sessions", { token, role, name, studentId, expiresAt: Date.now() + 1000 * 60 * 60 * 12 });
-    return { token, role, name, studentId };
+    const expiresAt = Date.now() + 1000 * 60 * 60 * 12;
+    await ctx.db.insert("sessions", { token, role, name, studentId, expiresAt });
+    return { token, role, name, studentId, expiresAt };
   },
 });
 
 export const me = query({
   args: { sessionToken: v.string() },
-  handler: async (ctx, args) => requireSession(ctx, args.sessionToken),
+  handler: async (ctx, { sessionToken }) => {
+    const session = await ctx.db.query("sessions").withIndex("by_token", (q) => q.eq("token", sessionToken)).unique();
+    if (!session || session.expiresAt < Date.now()) return null;
+    return session;
+  },
 });
 
 export const logout = mutation({

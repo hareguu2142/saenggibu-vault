@@ -10,7 +10,7 @@ import { api } from "@/convex/_generated/api";
 import { FormEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
-type Session = { token: string; role: "student" | "teacher"; name: string; studentId?: string };
+type Session = { token: string; role: "student" | "teacher"; name: string; studentId?: string; expiresAt?: number };
 type View = "records" | "detail" | "settings";
 type Filters = { className: string; number: string; name: string; subject: string; content: string };
 
@@ -31,6 +31,10 @@ export default function Home() {
   const login = useMutation(api.auth.login);
   const logoutMutation = useMutation(api.auth.logout);
   const [session, setSession] = useState<Session | null>(null);
+  const validatedSession = useQuery(
+    api.auth.me,
+    session ? { sessionToken: session.token } : "skip",
+  );
   const [ready, setReady] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -41,10 +45,63 @@ export default function Home() {
   useEffect(() => {
     const saved = window.localStorage.getItem("recorddam-session");
     if (saved) {
-      try { setSession(JSON.parse(saved)); } catch { window.localStorage.removeItem("recorddam-session"); }
+      try {
+        const parsed = JSON.parse(saved) as Session;
+        if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+          window.localStorage.removeItem("recorddam-session");
+        } else {
+          setSession(parsed);
+        }
+      } catch {
+        window.localStorage.removeItem("recorddam-session");
+      }
     }
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!session || validatedSession === undefined) return;
+    if (validatedSession === null) {
+      const timer = window.setTimeout(() => {
+        setSession(null);
+        setView("records");
+        setRecordId(null);
+        window.localStorage.removeItem("recorddam-session");
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    if (session.expiresAt !== validatedSession.expiresAt) {
+      const timer = window.setTimeout(() => {
+        const next: Session = {
+          token: session.token,
+          role: validatedSession.role,
+          name: validatedSession.name,
+          studentId: validatedSession.studentId,
+          expiresAt: validatedSession.expiresAt,
+        };
+        setSession(next);
+        window.localStorage.setItem("recorddam-session", JSON.stringify(next));
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [session, validatedSession]);
+
+  useEffect(() => {
+    if (!session?.expiresAt) return;
+    const remaining = session.expiresAt - Date.now();
+    const expire = () => {
+      setSession(null);
+      setView("records");
+      setRecordId(null);
+      window.localStorage.removeItem("recorddam-session");
+    };
+    if (remaining <= 0) {
+      expire();
+      return;
+    }
+    const timer = window.setTimeout(expire, remaining);
+    return () => window.clearTimeout(timer);
+  }, [session]);
 
   const notify = (message: string) => {
     setToast(message);
@@ -75,6 +132,9 @@ export default function Home() {
 
   if (!ready) return <main className="loading-screen">기록담을 여는 중입니다…</main>;
   if (!session) return <LoginScreen onSubmit={handleLogin} error={loginError} loading={loggingIn} />;
+  if (validatedSession === undefined || validatedSession === null) {
+    return <main className="loading-screen">로그인 정보를 확인하는 중입니다…</main>;
+  }
 
   return (
     <main className="app-shell">
