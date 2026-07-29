@@ -226,10 +226,12 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
   }, [record]);
   if (!record) return <div className="page-container"><button className="back-button" onClick={onBack}><ArrowLeft size={17} /> 목록으로</button><div className="loading-card">기록을 불러오는 중입니다…</div></div>;
   const save = async () => {
+    if (session.role !== "teacher") return;
     setSaving(true);
     try { await update({ sessionToken: session.token, recordId: recordId as any, content }); notify("수정 내용을 저장했습니다."); } finally { setSaving(false); }
   };
   const doRestore = async (historyId: string) => {
+    if (session.role !== "teacher") return;
     await restore({ sessionToken: session.token, historyId: historyId as any }); notify("선택한 버전으로 되돌렸습니다."); setSelectedHistory(null);
   };
   return (
@@ -242,8 +244,17 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
       <div className="detail-grid">
         <section className="editor-card">
           <div className="section-title"><div><BookOpen size={18} /><b>생활기록부 내용</b></div><span>{Array.from(content).length}자</span></div>
-          <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="생활기록부 내용을 작성해 주세요." />
-          <div className="editor-footer"><span>제출할 때마다 수정 이력이 자동으로 남습니다.</span><button className="primary-button" onClick={save} disabled={saving || content === record.content}>{saving ? "저장 중…" : "수정 내용 제출"}<Check size={17} /></button></div>
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="생활기록부 내용을 작성해 주세요."
+            readOnly={session.role !== "teacher"}
+            aria-label={session.role === "teacher" ? "생활기록부 내용 편집" : "생활기록부 내용"}
+          />
+          <div className="editor-footer">
+            <span>{session.role === "teacher" ? "제출할 때마다 수정 이력이 자동으로 남습니다." : "생활기록부는 선생님만 수정할 수 있습니다."}</span>
+            {session.role === "teacher" && <button className="primary-button" onClick={save} disabled={saving || content === record.content}>{saving ? "저장 중…" : "수정 내용 제출"}<Check size={17} /></button>}
+          </div>
         </section>
         <aside className="history-card">
           <div className="section-title"><div><History size={18} /><b>수정 이력</b></div><span>{record.histories.length}개</span></div>
@@ -258,7 +269,7 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
       {selectedHistory && <section className="compare-card">
         <div className="section-title"><div><History size={18} /><b>버전 비교</b></div><button className="icon-button" onClick={() => setSelectedHistory(null)}><X size={18} /></button></div>
         <div className="diff-grid"><div><span className="diff-label removed">수정 전</span><pre>{selectedHistory.beforeContent || "(내용 없음)"}</pre></div><div><span className="diff-label added">수정 후</span><pre>{selectedHistory.afterContent || "(내용 없음)"}</pre></div></div>
-        <div className="compare-footer"><span><i className="added">추가 {selectedHistory.addedCount}자</i><i className="removed">삭제 {selectedHistory.removedCount}자</i></span><button className="outline-button" onClick={() => doRestore(selectedHistory._id)}><RotateCcw size={16} /> 이 버전으로 되돌리기</button></div>
+        <div className="compare-footer"><span><i className="added">추가 {selectedHistory.addedCount}자</i><i className="removed">삭제 {selectedHistory.removedCount}자</i></span>{session.role === "teacher" && <button className="outline-button" onClick={() => doRestore(selectedHistory._id)}><RotateCcw size={16} /> 이 버전으로 되돌리기</button>}</div>
       </section>}
     </div>
   );

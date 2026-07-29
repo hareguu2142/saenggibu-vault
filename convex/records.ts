@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { diffCounts, requireSession } from "./helpers";
+import { diffCounts, requireSession, requireTeacher } from "./helpers";
 
 async function authorizedRecord(ctx: any, session: any, recordId: any) {
   const record = await ctx.db.get(recordId);
@@ -50,7 +50,7 @@ export const get = query({
 export const update = mutation({
   args: { sessionToken: v.string(), recordId: v.id("records"), content: v.string() },
   handler: async (ctx, { sessionToken, recordId, content }) => {
-    const session = await requireSession(ctx, sessionToken);
+    const session = await requireTeacher(ctx, sessionToken);
     const record: any = await authorizedRecord(ctx, session, recordId);
     if (record.content === content) return;
     await ctx.db.insert("histories", { recordId, beforeContent: record.content, afterContent: content, ...diffCounts(record.content, content), actorName: session.name, createdAt: Date.now() });
@@ -61,7 +61,7 @@ export const update = mutation({
 export const restore = mutation({
   args: { sessionToken: v.string(), historyId: v.id("histories") },
   handler: async (ctx, { sessionToken, historyId }) => {
-    const session = await requireSession(ctx, sessionToken);
+    const session = await requireTeacher(ctx, sessionToken);
     const history = await ctx.db.get(historyId);
     if (!history) throw new Error("수정 이력을 찾을 수 없습니다.");
     const record: any = await authorizedRecord(ctx, session, history.recordId);
