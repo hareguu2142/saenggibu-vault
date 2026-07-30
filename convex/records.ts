@@ -2,8 +2,6 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { diffCounts, requireSession, requireTeacher } from "./helpers";
 
-const EMPTY_CONTENT_MESSAGE = "아직 작성된 내용이 없습니다.";
-
 async function authorizedRecord(ctx: any, session: any, recordId: any) {
   const record = await ctx.db.get(recordId);
   if (!record) throw new Error("기록을 찾을 수 없습니다.");
@@ -18,40 +16,21 @@ export const list = query({
   },
   handler: async (ctx, { sessionToken, filters }) => {
     const session = await requireSession(ctx, sessionToken);
-    const students = session.role === "teacher"
-      ? await ctx.db.query("students").collect()
-      : [await ctx.db.get(session.studentId!)].filter((student) => student !== null);
     const records = session.role === "teacher"
       ? await ctx.db.query("records").collect()
       : await ctx.db.query("records").withIndex("by_student", (q) => q.eq("studentId", session.studentId!)).collect();
     const enriched = await Promise.all(records.map(async (record) => {
       const student = await ctx.db.get(record.studentId);
       const subject = await ctx.db.get(record.subjectId);
-      return student && subject ? { ...record, classNumber: student.classNumber, studentNumber: student.studentNumber, studentName: student.name, subjectLabel: subject.label, hasRecord: true } : null;
+      return student && subject ? { ...record, classNumber: student.classNumber, studentNumber: student.studentNumber, studentName: student.name, subjectLabel: subject.label } : null;
     }));
-    const validRecords = enriched.filter((record): record is NonNullable<typeof record> => !!record);
-    const studentIdsWithRecords = new Set(validRecords.map((record) => record.studentId));
-    const studentsWithoutRecords = students
-      .filter((student) => !studentIdsWithRecords.has(student!._id))
-      .map((student) => ({
-        _id: `student-without-record:${student!._id}`,
-        studentId: student!._id,
-        content: "",
-        updatedAt: student!.updatedAt,
-        classNumber: student!.classNumber,
-        studentNumber: student!.studentNumber,
-        studentName: student!.name,
-        subjectLabel: "",
-        hasRecord: false,
-      }));
-
-    return [...validRecords, ...studentsWithoutRecords]
+    return enriched.filter((record): record is NonNullable<typeof record> => !!record)
       .filter((r) =>
         (!filters.className || String(r.classNumber).includes(filters.className)) &&
         (!filters.number || String(r.studentNumber).includes(filters.number)) &&
         (!filters.name || r.studentName.toLowerCase().includes(filters.name.toLowerCase())) &&
         (!filters.subject || r.subjectLabel.toLowerCase().includes(filters.subject.toLowerCase())) &&
-        (!filters.content || (r.content || EMPTY_CONTENT_MESSAGE).toLowerCase().includes(filters.content.toLowerCase()))
+        (!filters.content || r.content.toLowerCase().includes(filters.content.toLowerCase()))
       ).sort((a, b) => a.classNumber - b.classNumber || a.studentNumber - b.studentNumber || a.subjectLabel.localeCompare(b.subjectLabel, "ko"));
   },
 });
