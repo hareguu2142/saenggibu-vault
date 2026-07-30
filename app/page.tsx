@@ -185,7 +185,7 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
     <div className="page-container">
       <div className="page-heading">
         <div><span className="eyebrow">RECORD LIBRARY</span><h1>{session.role === "teacher" ? "생활기록부 모아보기" : `${session.name}님의 생활기록부`}</h1><p>{session.role === "teacher" ? "학생들의 소중한 기록을 한눈에 확인하고 관리하세요." : "과목별로 쌓인 나의 성장 기록을 확인해 보세요."}</p></div>
-        <div className="count-card"><span>전체 기록</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
+        <div className="count-card"><span>전체 기록</span><strong>{records?.filter((record) => record.hasRecord !== false).length ?? 0}</strong><small>건</small></div>
       </div>
       <section className="records-card">
         <div className="search-title"><Search size={18} /><b>기록 검색</b><span>원하는 항목을 빠르게 찾아보세요.</span></div>
@@ -198,10 +198,10 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
             <tbody>
               {!records && <tr><td colSpan={7} className="empty-cell">기록을 불러오는 중입니다…</td></tr>}
               {records?.length === 0 && <tr><td colSpan={7} className="empty-cell">조건에 맞는 기록이 없습니다.</td></tr>}
-              {records?.map((record) => <tr key={record._id} onClick={() => onOpen(record._id)}>
-                <td>{record.classNumber}</td><td>{record.studentNumber}</td><td><b>{record.studentName}</b></td><td><span className="subject-pill">{record.subjectLabel}</span></td>
+              {records?.map((record) => <tr key={record._id} className={record.hasRecord === false ? "empty-record-row" : undefined} onClick={record.hasRecord === false ? undefined : () => onOpen(record._id)}>
+                <td>{record.classNumber}</td><td>{record.studentNumber}</td><td><b>{record.studentName}</b></td><td>{record.hasRecord === false ? "—" : <span className="subject-pill">{record.subjectLabel}</span>}</td>
                 <td><span className="content-preview">{record.content || "아직 작성된 내용이 없습니다."}</span></td><td><b className="byte-number">{neatBytes(record.content)}</b> bytes</td>
-                <td><button className="copy-button" onClick={(e) => copy(e, record.content)}><Clipboard size={15} /> 복사</button></td>
+                <td>{record.hasRecord === false ? "—" : <button className="copy-button" onClick={(e) => copy(e, record.content)}><Clipboard size={15} /> 복사</button>}</td>
               </tr>)}
             </tbody>
           </table>
