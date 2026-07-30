@@ -13,6 +13,16 @@ import * as XLSX from "xlsx";
 type Session = { token: string; role: "student" | "teacher"; name: string; studentId?: string; expiresAt?: number };
 type View = "records" | "detail" | "settings";
 type Filters = { className: string; number: string; name: string; subject: string; content: string };
+type ExportableRecord = {
+  classNumber: number;
+  studentNumber: number;
+  studentName: string;
+  subjectLabel: string;
+  content: string;
+  updatedAt?: number;
+};
+
+const RECORD_EXPORT_HEADERS = ["반", "번호", "이름", "내용", "나이스 바이트", "마지막 수정"];
 
 const neatBytes = (text: string) => {
   const chars = Array.from(text).length;
@@ -21,10 +31,79 @@ const neatBytes = (text: string) => {
   return 2 * lenB - chars;
 };
 
-const downloadWorkbook = (rows: Record<string, unknown>[], fileName: string, sheetName: string) => {
+const safeFileName = (value: string) => value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "생활기록부.xlsx";
+const safeSheetName = (value: string) => value.replace(/[:\\/?*\[\]]/g, "_").trim().slice(0, 31) || "생활기록부";
+
+const createWorksheet = (rows: Record<string, unknown>[], headers?: string[]) => {
+  const worksheet = XLSX.utils.json_to_sheet(rows, headers ? { header: headers } : undefined);
+  const resolvedHeaders = headers ?? (rows[0] ? Object.keys(rows[0]) : []);
+  if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
+  worksheet["!cols"] = resolvedHeaders.map((header) => {
+    const longest = rows.reduce((width, row) => Math.max(width, Array.from(String(row[header] ?? "")).length), Array.from(header).length);
+    return { wch: Math.min(Math.max(longest + 2, 8), header === "내용" ? 60 : 24) };
+  });
+  return worksheet;
+};
+
+const downloadWorkbook = (rows: Record<string, unknown>[], fileName: string, sheetName: string, headers?: string[]) => {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), sheetName);
-  XLSX.writeFile(workbook, fileName);
+  XLSX.utils.book_append_sheet(workbook, createWorksheet(rows, headers), safeSheetName(sheetName));
+  XLSX.writeFile(workbook, safeFileName(fileName));
+};
+
+const toRecordExportRow = (record: ExportableRecord) => ({
+  반: record.classNumber,
+  번호: record.studentNumber,
+  이름: record.studentName,
+  내용: record.content,
+  "나이스 바이트": neatBytes(record.content),
+  "마지막 수정": record.updatedAt ? new Date(record.updatedAt).toLocaleString("ko-KR") : "",
+});
+
+const downloadRecordsBySubject = (records: ExportableRecord[], fileName: string) => {
+  const workbook = XLSX.utils.book_new();
+  const grouped = new Map<string, ExportableRecord[]>();
+  for (const record of records) {
+    const subject = record.subjectLabel.trim() || "과목 미지정";
+    grouped.set(subject, [...(grouped.get(subject) ?? []), record]);
+  }
+
+  const usedSheetNames = new Set<string>();
+  for (const [subject, subjectRecords] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "ko"))) {
+    const baseName = safeSheetName(subject);
+    let sheetName = baseName;
+    let suffix = 2;
+    while (usedSheetNames.has(sheetName)) {
+      const suffixText = `_${suffix++}`;
+      sheetName = `${baseName.slice(0, 31 - suffixText.length)}${suffixText}`;
+    }
+    usedSheetNames.add(sheetName);
+    XLSX.utils.book_append_sheet(
+      workbook,
+      createWorksheet(subjectRecords.map(toRecordExportRow), RECORD_EXPORT_HEADERS),
+      sheetName,
+    );
+  }
+
+  XLSX.writeFile(workbook, safeFileName(fileName));
+};
+
+const copyToClipboard = async (text: string) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("clipboard copy failed");
 };
 
 export default function Home() {
@@ -179,13 +258,39 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
   const empty: Filters = { className: "", number: "", name: "", subject: "", content: "" };
   const [filters, setFilters] = useState<Filters>(empty);
   const records = useQuery(api.records.list, { sessionToken: session.token, filters }) as any[] | undefined;
-  const copy = async (event: MouseEvent, content: string) => { event.stopPropagation(); await navigator.clipboard.writeText(content); notify("내용을 복사했습니다."); };
+  const copy = async (event: MouseEvent, content: string) => {
+    event.stopPropagation();
+    try {
+      await copyToClipboard(content);
+      notify("학생 기록을 복사했습니다.");
+    } catch {
+      notify("복사하지 못했습니다. 브라우저 권한을 확인해 주세요.");
+    }
+  };
+  const exportBySubject = () => {
+    if (!records?.length) {
+      notify("내보낼 기록이 없습니다.");
+      return;
+    }
+    try {
+      downloadRecordsBySubject(
+        records,
+        `${session.role === "teacher" ? "전체_학생" : session.name}_과목별_생활기록부.xlsx`,
+      );
+      notify("과목별 Excel 파일을 내보냈습니다.");
+    } catch {
+      notify("Excel 파일을 만들지 못했습니다.");
+    }
+  };
   const fields: Array<[keyof Filters, string, string]> = [["className", "반", "예: 1"], ["number", "번호", "예: 12"], ["name", "이름", "학생 이름"], ["subject", "과목", "과목명"], ["content", "내용", "내용에서 검색"]];
   return (
     <div className="page-container">
       <div className="page-heading">
         <div><span className="eyebrow">RECORD LIBRARY</span><h1>{session.role === "teacher" ? "생활기록부 모아보기" : `${session.name}님의 생활기록부`}</h1><p>{session.role === "teacher" ? "학생들의 소중한 기록을 한눈에 확인하고 관리하세요." : "과목별로 쌓인 나의 성장 기록을 확인해 보세요."}</p></div>
-        <div className="count-card"><span>전체 기록</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
+        <div className="heading-actions">
+          <button className="dark-button records-export-button" onClick={exportBySubject} disabled={!records?.length}><FileSpreadsheet size={16} /> 과목별 Excel</button>
+          <div className="count-card"><span>검색된 기록</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
+        </div>
       </div>
       <section className="records-card">
         <div className="search-title"><Search size={18} /><b>기록 검색</b><span>원하는 항목을 빠르게 찾아보세요.</span></div>
@@ -201,7 +306,7 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
               {records?.map((record) => <tr key={record._id} onClick={() => onOpen(record._id)}>
                 <td>{record.classNumber}</td><td>{record.studentNumber}</td><td><b>{record.studentName}</b></td><td><span className="subject-pill">{record.subjectLabel}</span></td>
                 <td><span className="content-preview">{record.content || "아직 작성된 내용이 없습니다."}</span></td><td><b className="byte-number">{neatBytes(record.content)}</b> bytes</td>
-                <td><button className="copy-button" onClick={(e) => copy(e, record.content)}><Clipboard size={15} /> 복사</button></td>
+                <td><button className="copy-button" onClick={(e) => copy(e, record.content)} disabled={!record.content} aria-label={`${record.studentName} 학생의 ${record.subjectLabel} 기록 복사`} title={record.content ? "학생 기록 복사" : "복사할 내용이 없습니다."}><Clipboard size={15} /> 복사</button></td>
               </tr>)}
             </tbody>
           </table>
@@ -234,12 +339,20 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
     if (session.role !== "teacher") return;
     await restore({ sessionToken: session.token, historyId: historyId as any }); notify("선택한 버전으로 되돌렸습니다."); setSelectedHistory(null);
   };
+  const copyContent = async () => {
+    try {
+      await copyToClipboard(content);
+      notify("학생 기록을 복사했습니다.");
+    } catch {
+      notify("복사하지 못했습니다. 브라우저 권한을 확인해 주세요.");
+    }
+  };
   return (
     <div className="page-container detail-page">
       <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> 기록 목록</button>
       <div className="detail-title">
         <div><span className="subject-pill">{record.subjectLabel}</span><h1>{record.studentName} 학생의 기록</h1><p>{record.classNumber}반 {record.studentNumber}번 · 마지막 수정 {new Date(record.updatedAt).toLocaleString("ko-KR")}</p></div>
-        <div className="detail-tools"><div><span>나이스 바이트</span><b>{neatBytes(content)}</b><small> bytes</small></div><button className="copy-button large" onClick={async () => { await navigator.clipboard.writeText(content); notify("내용을 복사했습니다."); }}><Clipboard size={16} /> 내용 복사</button></div>
+        <div className="detail-tools"><div><span>나이스 바이트</span><b>{neatBytes(content)}</b><small> bytes</small></div><button className="copy-button large" onClick={copyContent} disabled={!content} title={content ? "학생 기록 복사" : "복사할 내용이 없습니다."}><Clipboard size={16} /> 기록 복사</button></div>
       </div>
       <div className="detail-grid">
         <section className="editor-card">
@@ -309,8 +422,8 @@ function StudentsSettings({ session, notify }: { session: Session; notify: (s: s
     <div className="settings-toolbar"><div><h2>학생 명단</h2><p>학생의 이름과 입장 코드를 관리합니다.</p></div><div>
       <input ref={fileRef} hidden type="file" accept=".xlsx,.xls" onChange={(e) => importFile(e.target.files?.[0])} />
       <button className="outline-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> 엑셀 불러오기</button>
-      <button className="outline-button" onClick={() => downloadWorkbook([{ 반: 1, 번호: 1, 이름: "홍길동", 코드: "ABC123" }], "학생명단_샘플.xlsx", "학생명단")}><FileDown size={16} /> 샘플</button>
-      <button className="dark-button" onClick={() => downloadWorkbook((students ?? []).map((s) => ({ 반: s.classNumber, 번호: s.studentNumber, 이름: s.name, 코드: "" })), "학생명단.xlsx", "학생명단")}><Download size={16} /> 내보내기</button>
+      <button className="outline-button" onClick={() => downloadWorkbook([{ 반: 1, 번호: 1, 이름: "홍길동", 코드: "ABC123" }], "학생명단_샘플.xlsx", "학생명단", ["반", "번호", "이름", "코드"])}><FileDown size={16} /> 샘플</button>
+      <button className="dark-button" onClick={() => downloadWorkbook((students ?? []).map((s) => ({ 반: s.classNumber, 번호: s.studentNumber, 이름: s.name, 코드: "" })), "학생명단.xlsx", "학생명단", ["반", "번호", "이름", "코드"])}><Download size={16} /> 내보내기</button>
     </div></div>
     <form key={`${formKey}-${editing?._id ?? "new"}`} className="inline-form" onSubmit={submit}>
       <label>반<input name="classNumber" type="number" min="1" required defaultValue={editing?.classNumber} /></label>
@@ -352,8 +465,19 @@ function SubjectsSettings({ session, notify }: { session: Session; notify: (s: s
       <select value={selected} onChange={(e) => setSelected(e.target.value)} aria-label="과목 선택">{subjects?.map((s) => <option key={s._id} value={s._id}>{s.label}</option>)}</select>
       <input ref={fileRef} hidden type="file" accept=".xlsx,.xls" onChange={(e) => importFile(e.target.files?.[0])} />
       <button className="outline-button" disabled={!selected} onClick={() => fileRef.current?.click()}><Upload size={16} /> 불러오기</button>
-      <button className="outline-button" onClick={() => downloadWorkbook([{ 반: 1, 번호: 1, 이름: "홍길동", 내용: "생활기록부 내용을 입력하세요." }], "생활기록부_샘플.xlsx", "생활기록부")}><FileDown size={16} /> 샘플</button>
-      <button className="dark-button" disabled={!selected} onClick={() => downloadWorkbook((exportRows ?? []).filter((r) => r.subjectId === selected).map((r) => ({ 반: r.classNumber, 번호: r.studentNumber, 이름: r.studentName, 내용: r.content })), `${selectedSubject?.label ?? "과목"}_생활기록부.xlsx`, selectedSubject?.label ?? "생활기록부")}><Download size={16} /> 내보내기</button>
+      <button className="outline-button" onClick={() => downloadWorkbook([{ 반: 1, 번호: 1, 이름: "홍길동", 내용: "생활기록부 내용을 입력하세요." }], "생활기록부_샘플.xlsx", "생활기록부", ["반", "번호", "이름", "내용"])}><FileDown size={16} /> 샘플</button>
+      <button className="dark-button" disabled={!selected || exportRows === undefined} onClick={() => {
+        const rows = (exportRows ?? []).filter((r) => r.subjectId === selected).map((r) => toRecordExportRow({
+          classNumber: r.classNumber,
+          studentNumber: r.studentNumber,
+          studentName: r.studentName,
+          subjectLabel: selectedSubject?.label ?? "",
+          content: r.content,
+          updatedAt: r.updatedAt,
+        }));
+        downloadWorkbook(rows, `${selectedSubject?.label ?? "과목"}_생활기록부.xlsx`, selectedSubject?.label ?? "생활기록부", RECORD_EXPORT_HEADERS);
+        notify(`${selectedSubject?.label ?? "선택한 과목"} 기록을 Excel로 내보냈습니다.`);
+      }}><Download size={16} /> 내보내기</button>
     </div>
   </section>;
 }

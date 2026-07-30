@@ -26,6 +26,7 @@ input:focus,textarea:focus,select:focus { border-color:#789583; box-shadow:0 0 0
 .user-name { font-size:13px; font-weight:600; }.icon-button { width:36px; height:36px; background:#f4f5f3; color:#67736d; }
 .page-container { width:min(1420px,92vw); margin:0 auto; padding:52px 0 80px; }.page-heading { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:30px; }
 .page-heading h1,.detail-title h1 { font-family:"Gowun Batang",serif; font-size:34px; margin:8px 0 6px; letter-spacing:-.04em; }.page-heading p,.detail-title p { margin:0; color:var(--muted); font-size:14px; }
+.heading-actions { display:flex; align-items:center; gap:10px; }.records-export-button { min-height:46px; padding-inline:16px; }
 .count-card { background:white; border:1px solid var(--line); border-radius:14px; padding:14px 19px; box-shadow:0 8px 30px #53645a0c; }.count-card span { color:var(--muted); font-size:11px; display:block; }.count-card strong { color:var(--green); font-size:28px; margin-right:4px; }.count-card small { color:var(--muted); }
 .records-card,.settings-card,.editor-card,.history-card,.compare-card,.loading-card { background:white; border:1px solid var(--line); border-radius:16px; box-shadow:0 12px 35px #53645a0a; }
 .loading-card { padding:50px; text-align:center; color:var(--muted); }
@@ -65,7 +66,7 @@ td { padding:16px 17px; border-bottom:1px solid #edf0ed; vertical-align:middle; 
 }
 @media(max-width:680px) {
   .login-page { padding:0; background:white; }.login-panel { min-height:100vh; border:0; border-radius:0; padding:32px 24px; box-shadow:none; }.login-brand { margin-bottom:72px; }
-  .topbar { padding:0 15px; }.brand-button small,.user-name,.nav-button { display:none; }.page-container { width:94vw; padding-top:30px; }.page-heading,.detail-title { align-items:flex-start; gap:18px; }.page-heading h1,.detail-title h1 { font-size:27px; }.count-card { display:none; }
+  .topbar { padding:0 15px; }.brand-button small,.user-name,.nav-button { display:none; }.page-container { width:94vw; padding-top:30px; }.page-heading,.detail-title { align-items:flex-start; gap:18px; }.page-heading h1,.detail-title h1 { font-size:27px; }.count-card { display:none; }.heading-actions { align-self:flex-start; }.records-export-button { padding:10px 12px; white-space:nowrap; }
   .filter-grid { grid-template-columns:1fr 1fr; }.filter-grid label:last-of-type { grid-column:1/-1; }.search-title span { display:none; }.detail-title { flex-direction:column; }.detail-tools { width:100%; justify-content:space-between; }
   .editor-footer { align-items:flex-start; gap:12px; flex-direction:column; }.editor-footer .primary-button { width:100%; }.diff-grid { grid-template-columns:1fr; }.diff-grid>div:first-child { border-right:0; border-bottom:1px solid var(--line); }
   .settings-toolbar>div:last-child { width:100%; overflow:auto; }.inline-form { grid-template-columns:1fr 1fr; }.subject-add { align-items:stretch; flex-direction:column; }.subject-add label { width:100%; }.subject-row { grid-template-columns:auto 1fr; }.subject-row>span:nth-of-type(2),.subject-row>div { grid-column:2; }.excel-zone { align-items:stretch; flex-direction:column; }.excel-zone>div { margin:0 0 6px; }
