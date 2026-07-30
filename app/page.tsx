@@ -288,7 +288,7 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
       <div className="page-heading">
         <div><span className="eyebrow">RECORD LIBRARY</span><h1>{session.role === "teacher" ? "생활기록부 모아보기" : `${session.name}님의 생활기록부`}</h1><p>{session.role === "teacher" ? "학생들의 소중한 기록을 한눈에 확인하고 관리하세요." : "과목별로 쌓인 나의 성장 기록을 확인해 보세요."}</p></div>
         <div className="heading-actions">
-          <button className="dark-button records-export-button" onClick={exportBySubject} disabled={!records?.length}><FileSpreadsheet size={16} /> 과목별 Excel</button>
+          <button className="dark-button records-export-button" onClick={exportBySubject} disabled={!records?.length}><FileSpreadsheet size={16} /> 검색 결과를 Excel로 저장</button>
           <div className="count-card"><span>검색된 기록</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
         </div>
       </div>
