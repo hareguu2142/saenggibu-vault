@@ -3,7 +3,7 @@
 import {
   ArrowLeft, BookOpen, Check, ChevronRight, Clipboard, Clock3, Download,
   FileDown, FileSpreadsheet, History, LogOut, Plus, RotateCcw, Search,
-  Settings, ShieldCheck, Trash2, Upload, Users, X,
+  PencilLine, Settings, ShieldCheck, Trash2, Upload, Users, X,
 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -11,7 +11,7 @@ import { FormEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 type Session = { token: string; role: "student" | "teacher"; name: string; studentId?: string; expiresAt?: number };
-type View = "records" | "detail" | "settings";
+type View = "records" | "detail" | "scratchpad" | "settings";
 type Filters = { className: string; number: string; name: string; subject: string; content: string };
 type ExportableRecord = {
   classNumber: number;
@@ -23,6 +23,7 @@ type ExportableRecord = {
 };
 
 const RECORD_EXPORT_HEADERS = ["반", "번호", "이름", "내용", "나이스 바이트", "마지막 수정"];
+type DiffLine = { kind: "same" | "removed" | "added"; text: string; oldLine?: number; newLine?: number };
 
 const neatBytes = (text: string) => {
   const chars = Array.from(text).length;
@@ -43,6 +44,38 @@ const createWorksheet = (rows: Record<string, unknown>[], headers?: string[]) =>
     return { wch: Math.min(Math.max(longest + 2, 8), header === "내용" ? 60 : 24) };
   });
   return worksheet;
+};
+
+const unifiedDiff = (before: string, after: string): DiffLine[] => {
+  const oldLines = before ? before.split("\n") : [];
+  const newLines = after ? after.split("\n") : [];
+  const table = Array.from({ length: oldLines.length + 1 }, () => Array(newLines.length + 1).fill(0));
+
+  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      table[oldIndex][newIndex] = oldLines[oldIndex] === newLines[newIndex]
+        ? table[oldIndex + 1][newIndex + 1] + 1
+        : Math.max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1]);
+    }
+  }
+
+  const result: DiffLine[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < oldLines.length || newIndex < newLines.length) {
+    if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
+      result.push({ kind: "same", text: oldLines[oldIndex], oldLine: oldIndex + 1, newLine: newIndex + 1 });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (newIndex >= newLines.length || (oldIndex < oldLines.length && table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1])) {
+      result.push({ kind: "removed", text: oldLines[oldIndex], oldLine: oldIndex + 1 });
+      oldIndex += 1;
+    } else {
+      result.push({ kind: "added", text: newLines[newIndex], newLine: newIndex + 1 });
+      newIndex += 1;
+    }
+  }
+  return result;
 };
 
 const downloadWorkbook = (rows: Record<string, unknown>[], fileName: string, sheetName: string, headers?: string[]) => {
@@ -223,6 +256,7 @@ export default function Home() {
           <span><b>기록담</b><small>생활기록부 공유 공간</small></span>
         </button>
         <div className="top-actions">
+          <button className={`nav-button scratchpad-nav ${view === "scratchpad" ? "active" : ""}`} onClick={() => setView("scratchpad")} aria-label="연습장"><PencilLine size={17} /><span>연습장</span></button>
           {session.role === "teacher" && <button className={`nav-button ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}><Settings size={17} /> 교사 설정</button>}
           <span className={`role-chip ${session.role}`}><ShieldCheck size={15} />{session.role === "teacher" ? "교사" : "학생"}</span>
           <span className="user-name">{session.name}</span>
@@ -231,9 +265,42 @@ export default function Home() {
       </header>
       {view === "records" && <RecordsView session={session} onOpen={(id) => { setRecordId(id); setView("detail"); }} notify={notify} />}
       {view === "detail" && recordId && <DetailView session={session} recordId={recordId} onBack={() => setView("records")} notify={notify} />}
+      {view === "scratchpad" && <ScratchpadView notify={notify} />}
       {view === "settings" && session.role === "teacher" && <SettingsView session={session} notify={notify} onBack={() => setView("records")} />}
       {toast && <div className="toast"><Check size={17} />{toast}</div>}
     </main>
+  );
+}
+
+function ScratchpadView({ notify }: { notify: (s: string) => void }) {
+  const [content, setContent] = useState("");
+  const characters = Array.from(content).length;
+
+  return (
+    <div className="page-container scratchpad-page">
+      <div className="page-heading">
+        <div><span className="eyebrow">SCRATCHPAD</span><h1>연습장</h1><p>문장을 자유롭게 다듬고 글자 수와 나이스 바이트를 바로 확인하세요.</p></div>
+        <div className="scratchpad-note"><ShieldCheck size={16} /><span><b>저장되지 않아요</b><small>작성 내용은 데이터베이스로 전송되지 않습니다.</small></span></div>
+      </div>
+      <section className="scratchpad-card">
+        <div className="scratchpad-stats">
+          <div><span>글자 수</span><strong>{characters.toLocaleString("ko-KR")}</strong><small>자</small></div>
+          <div><span>나이스 바이트</span><strong>{neatBytes(content).toLocaleString("ko-KR")}</strong><small>bytes</small></div>
+          <div><span>공백 제외</span><strong>{Array.from(content.replace(/\s/g, "")).length.toLocaleString("ko-KR")}</strong><small>자</small></div>
+        </div>
+        <label className="scratchpad-editor">
+          <span>내용</span>
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="글자 수를 확인할 내용을 입력하세요." autoFocus aria-label="연습장 내용" />
+        </label>
+        <div className="scratchpad-footer">
+          <span>연습장을 닫거나 새로고침하면 작성한 내용이 사라집니다.</span>
+          <div>
+            <button className="outline-button" onClick={() => setContent("")} disabled={!content}><Trash2 size={16} /> 모두 지우기</button>
+            <button className="primary-button" onClick={async () => { await navigator.clipboard.writeText(content); notify("연습장 내용을 복사했습니다."); }} disabled={!content}><Clipboard size={16} /> 내용 복사</button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -381,11 +448,29 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
       </div>
       {selectedHistory && <section className="compare-card">
         <div className="section-title"><div><History size={18} /><b>버전 비교</b></div><button className="icon-button" onClick={() => setSelectedHistory(null)}><X size={18} /></button></div>
-        <div className="diff-grid"><div><span className="diff-label removed">수정 전</span><pre>{selectedHistory.beforeContent || "(내용 없음)"}</pre></div><div><span className="diff-label added">수정 후</span><pre>{selectedHistory.afterContent || "(내용 없음)"}</pre></div></div>
+        <VersionDiff before={selectedHistory.beforeContent} after={selectedHistory.afterContent} />
         <div className="compare-footer"><span><i className="added">추가 {selectedHistory.addedCount}자</i><i className="removed">삭제 {selectedHistory.removedCount}자</i></span>{session.role === "teacher" && <button className="outline-button" onClick={() => doRestore(selectedHistory._id)}><RotateCcw size={16} /> 이 버전으로 되돌리기</button>}</div>
       </section>}
     </div>
   );
+}
+
+function VersionDiff({ before, after }: { before: string; after: string }) {
+  const lines = unifiedDiff(before, after);
+  const oldCount = before ? before.split("\n").length : 0;
+  const newCount = after ? after.split("\n").length : 0;
+
+  return <div className="unified-diff" aria-label="수정 전후 내용 비교">
+    <div className="diff-file-header"><span>--- 수정 전</span><span>+++ 수정 후</span></div>
+    <div className="diff-hunk">@@ -1,{oldCount} +1,{newCount} @@</div>
+    {lines.map((line, index) => <div className={`diff-line ${line.kind}`} key={`${line.kind}-${index}`}>
+      <span className="diff-line-number">{line.oldLine ?? ""}</span>
+      <span className="diff-line-number">{line.newLine ?? ""}</span>
+      <span className="diff-prefix">{line.kind === "removed" ? "−" : line.kind === "added" ? "+" : " "}</span>
+      <code>{line.text || " "}</code>
+    </div>)}
+    {lines.length === 0 && <div className="diff-empty">변경된 내용이 없습니다.</div>}
+  </div>;
 }
 
 function SettingsView({ session, notify, onBack }: { session: Session; notify: (s: string) => void; onBack: () => void }) {
