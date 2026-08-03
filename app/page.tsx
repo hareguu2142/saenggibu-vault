@@ -23,7 +23,7 @@ type ExportableRecord = {
 };
 
 const RECORD_EXPORT_HEADERS = ["반", "번호", "이름", "내용", "나이스 바이트", "마지막 수정"];
-type DiffLine = { kind: "same" | "removed" | "added"; text: string; oldLine?: number; newLine?: number };
+type DiffPart = { kind: "same" | "removed" | "added"; text: string };
 
 const neatBytes = (text: string) => {
   const chars = Array.from(text).length;
@@ -46,34 +46,69 @@ const createWorksheet = (rows: Record<string, unknown>[], headers?: string[]) =>
   return worksheet;
 };
 
-const unifiedDiff = (before: string, after: string): DiffLine[] => {
-  const oldLines = before ? before.split("\n") : [];
-  const newLines = after ? after.split("\n") : [];
-  const table = Array.from({ length: oldLines.length + 1 }, () => Array(newLines.length + 1).fill(0));
+const characterDiff = (before: string, after: string): DiffPart[] => {
+  const oldChars = Array.from(before);
+  const newChars = Array.from(after);
+  if (before === after) return before ? [{ kind: "same", text: before }] : [];
+  if (!oldChars.length) return [{ kind: "added", text: after }];
+  if (!newChars.length) return [{ kind: "removed", text: before }];
 
-  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
-    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
-      table[oldIndex][newIndex] = oldLines[oldIndex] === newLines[newIndex]
-        ? table[oldIndex + 1][newIndex + 1] + 1
-        : Math.max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1]);
+  const trace: Map<number, number>[] = [];
+  let frontier = new Map<number, number>([[1, 0]]);
+  let finalDepth = 0;
+
+  search: for (let depth = 0; depth <= oldChars.length + newChars.length; depth += 1) {
+    trace.push(new Map(frontier));
+    for (let diagonal = -depth; diagonal <= depth; diagonal += 2) {
+      const left = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+      const right = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+      let oldIndex = diagonal === -depth || (diagonal !== depth && left < right) ? right : left + 1;
+      if (!Number.isFinite(oldIndex)) oldIndex = 0;
+      let newIndex = oldIndex - diagonal;
+      while (oldIndex < oldChars.length && newIndex < newChars.length && oldChars[oldIndex] === newChars[newIndex]) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+      frontier.set(diagonal, oldIndex);
+      if (oldIndex >= oldChars.length && newIndex >= newChars.length) {
+        finalDepth = depth;
+        break search;
+      }
     }
   }
 
-  const result: DiffLine[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-  while (oldIndex < oldLines.length || newIndex < newLines.length) {
-    if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
-      result.push({ kind: "same", text: oldLines[oldIndex], oldLine: oldIndex + 1, newLine: newIndex + 1 });
-      oldIndex += 1;
-      newIndex += 1;
-    } else if (newIndex >= newLines.length || (oldIndex < oldLines.length && table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1])) {
-      result.push({ kind: "removed", text: oldLines[oldIndex], oldLine: oldIndex + 1 });
-      oldIndex += 1;
-    } else {
-      result.push({ kind: "added", text: newLines[newIndex], newLine: newIndex + 1 });
-      newIndex += 1;
+  const operations: Array<{ kind: DiffPart["kind"]; char: string }> = [];
+  let oldIndex = oldChars.length;
+  let newIndex = newChars.length;
+  for (let depth = finalDepth; depth >= 0; depth -= 1) {
+    const previous = trace[depth];
+    const diagonal = oldIndex - newIndex;
+    const left = previous.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+    const right = previous.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+    const previousDiagonal = diagonal === -depth || (diagonal !== depth && left < right) ? diagonal + 1 : diagonal - 1;
+    const previousOldIndex = previous.get(previousDiagonal) ?? 0;
+    const previousNewIndex = previousOldIndex - previousDiagonal;
+
+    while (oldIndex > previousOldIndex && newIndex > previousNewIndex) {
+      operations.push({ kind: "same", char: oldChars[oldIndex - 1] });
+      oldIndex -= 1;
+      newIndex -= 1;
     }
+    if (depth === 0) break;
+    if (oldIndex === previousOldIndex) {
+      operations.push({ kind: "added", char: newChars[newIndex - 1] });
+      newIndex -= 1;
+    } else {
+      operations.push({ kind: "removed", char: oldChars[oldIndex - 1] });
+      oldIndex -= 1;
+    }
+  }
+
+  const result: DiffPart[] = [];
+  for (const operation of operations.reverse()) {
+    const last = result[result.length - 1];
+    if (last?.kind === operation.kind) last.text += operation.char;
+    else result.push({ kind: operation.kind, text: operation.char });
   }
   return result;
 };
@@ -456,20 +491,20 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
 }
 
 function VersionDiff({ before, after }: { before: string; after: string }) {
-  const lines = unifiedDiff(before, after);
+  const parts = characterDiff(before, after);
   const oldCount = before ? before.split("\n").length : 0;
   const newCount = after ? after.split("\n").length : 0;
 
   return <div className="unified-diff" aria-label="수정 전후 내용 비교">
     <div className="diff-file-header"><span>--- 수정 전</span><span>+++ 수정 후</span></div>
     <div className="diff-hunk">@@ -1,{oldCount} +1,{newCount} @@</div>
-    {lines.map((line, index) => <div className={`diff-line ${line.kind}`} key={`${line.kind}-${index}`}>
-      <span className="diff-line-number">{line.oldLine ?? ""}</span>
-      <span className="diff-line-number">{line.newLine ?? ""}</span>
-      <span className="diff-prefix">{line.kind === "removed" ? "−" : line.kind === "added" ? "+" : " "}</span>
-      <code>{line.text || " "}</code>
-    </div>)}
-    {lines.length === 0 && <div className="diff-empty">변경된 내용이 없습니다.</div>}
+    <div className="word-diff-legend"><span className="removed">삭제</span><span className="added">추가</span><small>글자 단위 비교</small></div>
+    <code className="word-diff-content">{parts.map((part, index) => part.kind === "same"
+      ? <span key={index}>{part.text}</span>
+      : part.kind === "removed"
+        ? <del key={index}>{part.text}</del>
+        : <ins key={index}>{part.text}</ins>)}</code>
+    {parts.length === 0 && <div className="diff-empty">변경된 내용이 없습니다.</div>}
   </div>;
 }
 
