@@ -94,7 +94,7 @@ export const me = query({
   args: { sessionToken: v.string() },
   handler: async (ctx, { sessionToken }) => {
     const session = await ctx.db.query("sessions").withIndex("by_token", (q) => q.eq("token", sessionToken)).unique();
-    if (!session || session.expiresAt < Date.now() || (session.role === "teacher" && session.name === "admin")) return null;
+    if (!session || session.expiresAt < Date.now()) return null;
     return session;
   },
 });

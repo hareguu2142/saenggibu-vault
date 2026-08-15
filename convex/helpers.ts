@@ -11,7 +11,7 @@ export function randomToken() {
 
 export async function requireSession(ctx: QueryCtx | MutationCtx, token: string) {
   const session = await ctx.db.query("sessions").withIndex("by_token", (q) => q.eq("token", token)).unique();
-  if (!session || session.expiresAt < Date.now() || (session.role === "teacher" && session.name === "admin")) throw new Error("로그인이 만료되었습니다. 다시 로그인해 주세요.");
+  if (!session || session.expiresAt < Date.now()) throw new Error("로그인이 만료되었습니다. 다시 로그인해 주세요.");
   return session;
 }
 
