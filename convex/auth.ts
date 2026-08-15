@@ -17,7 +17,7 @@ function teacherAccounts(): TeacherAccount[] {
     return parsed.filter((item): item is TeacherAccount => {
       if (!item || typeof item !== "object") return false;
       const account = item as Record<string, unknown>;
-      return typeof account.name === "string" && typeof account.code === "string" && account.name.trim().length > 0 && account.code.length >= 8;
+      return typeof account.name === "string" && typeof account.code === "string" && account.name.trim().length > 0 && account.code.length > 0;
     });
   } catch {
     return [];

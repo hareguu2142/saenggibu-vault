@@ -27,7 +27,7 @@ npm run dev
 
 ## 교사 계정 설정
 
-교사 계정은 소스 코드에 저장하지 않고 Convex 환경 변수 `TEACHER_ACCOUNTS`에서 읽습니다. 운영 배포 전에 실제 교사 4명의 이름과 서로 다른 8자 이상 코드를 설정하세요. PowerShell에서는 다음 형식으로 설정할 수 있습니다.
+교사 계정은 소스 코드에 저장하지 않고 Convex 환경 변수 `TEACHER_ACCOUNTS`에서 읽습니다. 운영 배포 전에 실제 교사 4명의 이름과 서로 다른 코드를 설정하세요. PowerShell에서는 다음 형식으로 설정할 수 있습니다.
 
 ```powershell
 npx convex env set TEACHER_ACCOUNTS '[{"name":"교사1","code":"안전한교사코드1A"},{"name":"교사2","code":"안전한교사코드2B"},{"name":"교사3","code":"안전한교사코드3C"},{"name":"교사4","code":"안전한교사코드4D"}]'
