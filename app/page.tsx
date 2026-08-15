@@ -5,9 +5,10 @@ import {
   FileDown, FileSpreadsheet, History, LogOut, Plus, RotateCcw, Search,
   PencilLine, Settings, ShieldCheck, Trash2, Upload, Users, X,
 } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { FormEvent, MouseEvent, useEffect, useRef, useState } from "react";
+import type { Id } from "@/convex/_generated/dataModel";
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 type Session = { token: string; role: "student" | "teacher"; name: string; studentId?: string; expiresAt?: number };
@@ -21,6 +22,48 @@ type ExportableRecord = {
   content: string;
   updatedAt?: number;
 };
+type RecordListRow = {
+  _id: string;
+  classNumber: number;
+  studentNumber: number;
+  studentName: string;
+  subjectLabel: string;
+  content?: string;
+  contentPreview?: string;
+  contentBytes?: number;
+  updatedAt: number;
+};
+type HistoryEntry = {
+  _id: Id<"histories">;
+  beforeContent: string;
+  afterContent: string;
+  addedCount: number;
+  removedCount: number;
+  actorName: string;
+  createdAt: number;
+};
+type RecordDetail = {
+  _id: Id<"records">;
+  studentName: string;
+  classNumber: number;
+  studentNumber: number;
+  subjectLabel: string;
+  content: string;
+  updatedAt: number;
+};
+type StudentAdminRow = {
+  _id: Id<"students">;
+  classNumber: number;
+  studentNumber: number;
+  name: string;
+  updatedAt: number;
+};
+type SubjectAdminRow = {
+  _id: Id<"subjects">;
+  label: string;
+  recordCount: number;
+};
+type SheetRow = Record<string, unknown>;
 
 const RECORD_EXPORT_HEADERS = ["반", "번호", "이름", "내용", "나이스 바이트", "마지막 수정"];
 type DiffPart = { kind: "same" | "removed" | "added"; text: string };
@@ -54,7 +97,7 @@ const characterDiff = (before: string, after: string): DiffPart[] => {
   if (!newChars.length) return [{ kind: "removed", text: before }];
 
   const trace: Map<number, number>[] = [];
-  let frontier = new Map<number, number>([[1, 0]]);
+  const frontier = new Map<number, number>([[1, 0]]);
   let finalDepth = 0;
 
   search: for (let depth = 0; depth <= oldChars.length + newChars.length; depth += 1) {
@@ -190,20 +233,23 @@ export default function Home() {
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("recorddam-session");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as Session;
-        if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+    const timer = window.setTimeout(() => {
+      const saved = window.localStorage.getItem("recorddam-session");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved) as Session;
+          if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+            window.localStorage.removeItem("recorddam-session");
+          } else {
+            setSession(parsed);
+          }
+        } catch {
           window.localStorage.removeItem("recorddam-session");
-        } else {
-          setSession(parsed);
         }
-      } catch {
-        window.localStorage.removeItem("recorddam-session");
       }
-    }
-    setReady(true);
+      setReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -262,7 +308,11 @@ export default function Home() {
     setLoggingIn(true);
     try {
       const result = await login({ name: String(form.get("name") ?? "").trim(), code: String(form.get("code") ?? "").trim() });
-      const next = result as Session;
+      if (!result.ok) {
+        setLoginError(result.error);
+        return;
+      }
+      const next: Session = { token: result.token, role: result.role, name: result.name, studentId: result.studentId, expiresAt: result.expiresAt };
       setSession(next);
       window.localStorage.setItem("recorddam-session", JSON.stringify(next));
       setView("records");
@@ -356,10 +406,49 @@ function LoginScreen({ onSubmit, error, loading }: { onSubmit: (e: FormEvent<HTM
   );
 }
 
+const EMPTY_FILTERS: Filters = { className: "", number: "", name: "", subject: "", content: "" };
+
+function matchesRecord(record: RecordListRow, filters: Filters, includeContent: boolean) {
+  return (!filters.className || String(record.classNumber).includes(filters.className))
+    && (!filters.number || String(record.studentNumber).includes(filters.number))
+    && (!filters.name || record.studentName.toLowerCase().includes(filters.name.toLowerCase()))
+    && (!filters.subject || record.subjectLabel.toLowerCase().includes(filters.subject.toLowerCase()))
+    && (!includeContent || !filters.content || String(record.content ?? "").toLowerCase().includes(filters.content.toLowerCase()));
+}
+
 function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (id: string) => void; notify: (s: string) => void }) {
-  const empty: Filters = { className: "", number: "", name: "", subject: "", content: "" };
-  const [filters, setFilters] = useState<Filters>(empty);
-  const records = useQuery(api.records.list, { sessionToken: session.token, filters }) as any[] | undefined;
+  const convex = useConvex();
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [debouncedContent, setDebouncedContent] = useState("");
+  const summaries = useQuery(api.records.listSummaries, session.role === "teacher" ? { sessionToken: session.token } : "skip") as RecordListRow[] | undefined;
+  const mine = useQuery(api.records.listMine, session.role === "student" ? { sessionToken: session.token } : "skip") as RecordListRow[] | undefined;
+  const ensureSummaries = useMutation(api.records.ensureSummaries);
+  const summarySyncStarted = useRef(false);
+
+  useEffect(() => {
+    if (session.role !== "teacher" || summarySyncStarted.current) return;
+    summarySyncStarted.current = true;
+    ensureSummaries({ sessionToken: session.token }).catch(() => notify("기록 목록 최적화를 준비하지 못했습니다."));
+  }, [ensureSummaries, notify, session.role, session.token]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedContent(filters.content.trim()), 400);
+    return () => window.clearTimeout(timer);
+  }, [filters.content]);
+
+  const contentSearch = usePaginatedQuery(
+    api.records.searchContent,
+    session.role === "teacher" && debouncedContent ? { sessionToken: session.token, search: debouncedContent } : "skip",
+    { initialNumItems: 30 },
+  );
+  const teacherSource: RecordListRow[] | undefined = debouncedContent ? contentSearch.results as RecordListRow[] : summaries;
+  const records = useMemo<RecordListRow[] | undefined>(() => {
+    const source = session.role === "teacher" ? teacherSource : mine;
+    if (!source) return undefined;
+    return source.filter((record) => matchesRecord(record, filters, session.role === "student"));
+  }, [filters, mine, session.role, teacherSource]);
+  const searchPending = session.role === "teacher" && filters.content.trim() !== debouncedContent;
+
   const copy = async (event: MouseEvent, content: string) => {
     event.stopPropagation();
     try {
@@ -369,16 +458,27 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
       notify("복사하지 못했습니다. 브라우저 권한을 확인해 주세요.");
     }
   };
-  const exportBySubject = () => {
-    if (!records?.length) {
-      notify("내보낼 기록이 없습니다.");
-      return;
-    }
+
+  const exportBySubject = async () => {
     try {
-      downloadRecordsBySubject(
-        records,
-        `${session.role === "teacher" ? "전체_학생" : session.name}_과목별_생활기록부.xlsx`,
-      );
+      const rows = session.role === "teacher"
+        ? await convex.query(api.admin.exportRecords, { sessionToken: session.token })
+        : mine ?? [];
+      const filtered: ExportableRecord[] = rows
+        .filter((record) => matchesRecord(record, filters, true))
+        .map((record) => ({
+          classNumber: record.classNumber,
+          studentNumber: record.studentNumber,
+          studentName: record.studentName,
+          subjectLabel: record.subjectLabel,
+          content: String(record.content ?? ""),
+          updatedAt: record.updatedAt,
+        }));
+      if (!filtered.length) {
+        notify("내보낼 기록이 없습니다.");
+        return;
+      }
+      downloadRecordsBySubject(filtered, `${session.role === "teacher" ? "전체_학생" : session.name}_과목별_생활기록부.xlsx`);
       notify("과목별 Excel 파일을 내보냈습니다.");
     } catch {
       notify("Excel 파일을 만들지 못했습니다.");
@@ -388,43 +488,50 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
   return (
     <div className="page-container">
       <div className="page-heading">
-        <div><span className="eyebrow">RECORD LIBRARY</span><h1>{session.role === "teacher" ? "생활기록부 모아보기" : `${session.name}님의 생활기록부`}</h1><p>{session.role === "teacher" ? "학생들의 소중한 기록을 한눈에 확인하고 관리하세요." : "과목별로 쌓인 나의 성장 기록을 확인해 보세요."}</p></div>
+        <div><span className="eyebrow">RECORD LIBRARY</span><h1>{session.role === "teacher" ? "생활기록부 모아보기" : `${session.name}님의 생활기록부`}</h1><p>{session.role === "teacher" ? "목록은 실시간으로 갱신되고 검색은 필요한 범위에서만 처리됩니다." : "과목별로 쌓인 나의 성장 기록을 확인해 보세요."}</p></div>
         <div className="heading-actions">
           <button className="dark-button records-export-button" onClick={exportBySubject} disabled={!records?.length}><FileSpreadsheet size={16} /> 검색 결과를 Excel로 저장</button>
-          <div className="count-card"><span>검색된 기록</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
+          <div className="count-card"><span>{debouncedContent ? "불러온 검색 결과" : "검색된 기록"}</span><strong>{records?.length ?? 0}</strong><small>건</small></div>
         </div>
       </div>
       <section className="records-card">
-        <div className="search-title"><Search size={18} /><b>기록 검색</b><span>원하는 항목을 빠르게 찾아보세요.</span></div>
+        <div className="search-title"><Search size={18} /><b>기록 검색</b><span>{session.role === "teacher" ? "이름·과목은 브라우저에서, 내용은 검색 인덱스에서 찾습니다." : "내 기록 안에서 빠르게 찾아보세요."}</span></div>
         <div className="filter-grid">
           {fields.map(([key, label, placeholder]) => <label key={key}><span>{label}</span><input value={filters[key]} onChange={(e) => setFilters({ ...filters, [key]: e.target.value })} placeholder={placeholder} /></label>)}
-          <button className="clear-button" onClick={() => setFilters(empty)}><X size={15} /> 초기화</button>
+          <button className="clear-button" onClick={() => setFilters(EMPTY_FILTERS)}><X size={15} /> 초기화</button>
         </div>
         <div className="table-wrap">
           <table><thead><tr><th>반</th><th>번호</th><th>이름</th><th>과목</th><th>내용</th><th>바이트 수</th><th /></tr></thead>
             <tbody>
-              {!records && <tr><td colSpan={7} className="empty-cell">기록을 불러오는 중입니다…</td></tr>}
-              {records?.length === 0 && <tr><td colSpan={7} className="empty-cell">조건에 맞는 기록이 없습니다.</td></tr>}
-              {records?.map((record) => <tr key={record._id} onClick={() => onOpen(record._id)}>
-                <td>{record.classNumber}</td><td>{record.studentNumber}</td><td><b>{record.studentName}</b></td><td><span className="subject-pill">{record.subjectLabel}</span></td>
-                <td><span className="content-preview">{record.content || "아직 작성된 내용이 없습니다."}</span></td><td><b className="byte-number">{neatBytes(record.content)}</b> bytes</td>
-                <td><button className="copy-button" onClick={(e) => copy(e, record.content)} disabled={!record.content} aria-label={`${record.studentName} 학생의 ${record.subjectLabel} 기록 복사`} title={record.content ? "학생 기록 복사" : "복사할 내용이 없습니다."}><Clipboard size={15} /> 복사</button></td>
-              </tr>)}
+              {(!records || searchPending) && <tr><td colSpan={7} className="empty-cell">{searchPending ? "검색어 입력을 기다리는 중입니다…" : "기록을 불러오는 중입니다…"}</td></tr>}
+              {!searchPending && records?.length === 0 && <tr><td colSpan={7} className="empty-cell">조건에 맞는 기록이 없습니다.</td></tr>}
+              {!searchPending && records?.map((record) => {
+                const content = String(record.content ?? "");
+                const preview = content || record.contentPreview || (session.role === "teacher" ? "상세 화면에서 내용을 확인하세요." : "아직 작성된 내용이 없습니다.");
+                const bytes = typeof record.contentBytes === "number" ? record.contentBytes : neatBytes(content);
+                return <tr key={record._id} onClick={() => onOpen(record._id)}>
+                  <td>{record.classNumber}</td><td>{record.studentNumber}</td><td><b>{record.studentName}</b></td><td><span className="subject-pill">{record.subjectLabel}</span></td>
+                  <td><span className="content-preview">{preview}</span></td><td><b className="byte-number">{bytes}</b> bytes</td>
+                  <td>{session.role === "student" ? <button className="copy-button" onClick={(e) => copy(e, content)} disabled={!content} aria-label={`${record.studentName} 학생의 ${record.subjectLabel} 기록 복사`}><Clipboard size={15} /> 복사</button> : <span className="detail-hint">상세 보기</span>}</td>
+                </tr>;
+              })}
             </tbody>
           </table>
         </div>
+        {session.role === "teacher" && debouncedContent && contentSearch.status !== "Exhausted" && <div className="pagination-footer"><button className="outline-button" disabled={contentSearch.status !== "CanLoadMore"} onClick={() => contentSearch.loadMore(30)}>{contentSearch.status === "LoadingMore" ? "불러오는 중…" : "검색 결과 더 보기"}</button></div>}
       </section>
     </div>
   );
 }
 
 function DetailView({ session, recordId, onBack, notify }: { session: Session; recordId: string; onBack: () => void; notify: (s: string) => void }) {
-  const record = useQuery(api.records.get, { sessionToken: session.token, recordId: recordId as any }) as any;
+  const record = useQuery(api.records.get, { sessionToken: session.token, recordId: recordId as Id<"records"> }) as RecordDetail | undefined;
   const update = useMutation(api.records.update);
   const restore = useMutation(api.records.restore);
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
-  const [selectedHistory, setSelectedHistory] = useState<any>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [selectedHistory, setSelectedHistory] = useState<HistoryEntry | null>(null);
   const initialized = useRef("");
   useEffect(() => {
     if (record && initialized.current !== record._id + record.updatedAt) {
@@ -435,11 +542,11 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
   const save = async () => {
     if (session.role !== "teacher") return;
     setSaving(true);
-    try { await update({ sessionToken: session.token, recordId: recordId as any, content }); notify("수정 내용을 저장했습니다."); } finally { setSaving(false); }
+    try { await update({ sessionToken: session.token, recordId: recordId as Id<"records">, content }); notify("수정 내용을 저장했습니다."); } finally { setSaving(false); }
   };
   const doRestore = async (historyId: string) => {
     if (session.role !== "teacher") return;
-    await restore({ sessionToken: session.token, historyId: historyId as any }); notify("선택한 버전으로 되돌렸습니다."); setSelectedHistory(null);
+    await restore({ sessionToken: session.token, historyId: historyId as Id<"histories"> }); notify("선택한 버전으로 되돌렸습니다."); setSelectedHistory(null);
   };
   const copyContent = async () => {
     try {
@@ -472,13 +579,10 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
           </div>
         </section>
         <aside className="history-card">
-          <div className="section-title"><div><History size={18} /><b>수정 이력</b></div><span>{record.histories.length}개</span></div>
-          <div className="history-list">
-            {record.histories.length === 0 && <div className="empty-history"><Clock3 size={23} /><p>아직 수정 이력이 없습니다.</p></div>}
-            {record.histories.map((item: any, index: number) => <button key={item._id} className={`history-item ${selectedHistory?._id === item._id ? "selected" : ""}`} onClick={() => setSelectedHistory(item)}>
-              <span className="history-dot" /><span className="history-main"><b>{index === 0 ? "최근 수정" : `${record.histories.length - index}번째 수정`}</b><small>{new Date(item.createdAt).toLocaleString("ko-KR")} · {item.actorName}</small><em><i>+ {item.addedCount}자</i><i>- {item.removedCount}자</i></em></span><ChevronRight size={17} />
-            </button>)}
-          </div>
+          <div className="section-title"><div><History size={18} /><b>수정 이력</b></div><button className="text-button" onClick={() => { setShowHistory((value) => !value); setSelectedHistory(null); }}>{showHistory ? "닫기" : "이력 불러오기"}</button></div>
+          {showHistory
+            ? <HistoryPanel session={session} recordId={recordId} selectedHistory={selectedHistory} onSelect={setSelectedHistory} />
+            : <div className="empty-history"><Clock3 size={23} /><p>필요할 때만 이력을 불러와<br />데이터 사용량을 줄입니다.</p></div>}
         </aside>
       </div>
       {selectedHistory && <section className="compare-card">
@@ -488,6 +592,17 @@ function DetailView({ session, recordId, onBack, notify }: { session: Session; r
       </section>}
     </div>
   );
+}
+
+function HistoryPanel({ session, recordId, selectedHistory, onSelect }: { session: Session; recordId: string; selectedHistory: HistoryEntry | null; onSelect: (history: HistoryEntry) => void }) {
+  const histories = useQuery(api.records.listHistories, { sessionToken: session.token, recordId: recordId as Id<"records"> }) as HistoryEntry[] | undefined;
+  return <div className="history-list">
+    {!histories && <div className="empty-history"><Clock3 size={23} /><p>수정 이력을 불러오는 중입니다…</p></div>}
+    {histories?.length === 0 && <div className="empty-history"><Clock3 size={23} /><p>아직 수정 이력이 없습니다.</p></div>}
+    {histories?.map((item, index) => <button key={item._id} className={`history-item ${selectedHistory?._id === item._id ? "selected" : ""}`} onClick={() => onSelect(item)}>
+      <span className="history-dot" /><span className="history-main"><b>{index === 0 ? "최근 수정" : `${histories.length - index}번째 수정`}</b><small>{new Date(item.createdAt).toLocaleString("ko-KR")} · {item.actorName}</small><em><i>+ {item.addedCount}자</i><i>- {item.removedCount}자</i></em></span><ChevronRight size={17} />
+    </button>)}
+  </div>;
 }
 
 function VersionDiff({ before, after }: { before: string; after: string }) {
@@ -519,11 +634,11 @@ function SettingsView({ session, notify, onBack }: { session: Session; notify: (
 }
 
 function StudentsSettings({ session, notify }: { session: Session; notify: (s: string) => void }) {
-  const students = useQuery(api.admin.listStudents, { sessionToken: session.token }) as any[] | undefined;
+  const students = useQuery(api.admin.listStudents, { sessionToken: session.token }) as StudentAdminRow[] | undefined;
   const upsert = useMutation(api.admin.upsertStudent);
   const remove = useMutation(api.admin.removeStudent);
   const bulk = useMutation(api.admin.importStudents);
-  const [editing, setEditing] = useState<any>(null);
+  const [editing, setEditing] = useState<StudentAdminRow | null>(null);
   const [formKey, setFormKey] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const submit = async (e: FormEvent<HTMLFormElement>) => {
@@ -534,7 +649,7 @@ function StudentsSettings({ session, notify }: { session: Session; notify: (s: s
   const importFile = async (file?: File) => {
     if (!file) return;
     const workbook = XLSX.read(await file.arrayBuffer());
-    const rows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[workbook.SheetNames[0]]);
+    const rows = XLSX.utils.sheet_to_json<SheetRow>(workbook.Sheets[workbook.SheetNames[0]]);
     await bulk({ sessionToken: session.token, students: rows.map((r) => ({ classNumber: Number(r["반"]), studentNumber: Number(r["번호"]), name: String(r["이름"] ?? ""), code: String(r["코드"] ?? "") })) });
     notify(`${rows.length}명의 명단을 불러왔습니다.`);
   };
@@ -559,21 +674,22 @@ function StudentsSettings({ session, notify }: { session: Session; notify: (s: s
 }
 
 function SubjectsSettings({ session, notify }: { session: Session; notify: (s: string) => void }) {
-  const subjects = useQuery(api.admin.listSubjects, { sessionToken: session.token }) as any[] | undefined;
+  const convex = useConvex();
+  const subjects = useQuery(api.admin.listSubjects, { sessionToken: session.token }) as SubjectAdminRow[] | undefined;
   const addSubject = useMutation(api.admin.upsertSubject);
   const removeSubject = useMutation(api.admin.removeSubject);
   const importRecords = useMutation(api.admin.importRecords);
-  const exportRows = useQuery(api.admin.exportRecords, { sessionToken: session.token }) as any[] | undefined;
   const [label, setLabel] = useState("");
   const [selected, setSelected] = useState("");
+  const [exporting, setExporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (!selected && subjects?.[0]) setSelected(subjects[0]._id); }, [subjects, selected]);
-  const selectedSubject = subjects?.find((s) => s._id === selected);
+  const selectedSubjectId = selected || subjects?.[0]?._id || "";
+  const selectedSubject = subjects?.find((s) => s._id === selectedSubjectId);
   const importFile = async (file?: File) => {
-    if (!file || !selected) return;
+    if (!file || !selectedSubjectId) return;
     const workbook = XLSX.read(await file.arrayBuffer());
-    const rows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[workbook.SheetNames[0]]);
-    await importRecords({ sessionToken: session.token, subjectId: selected as any, records: rows.map((r) => ({ classNumber: Number(r["반"]), studentNumber: Number(r["번호"]), name: String(r["이름"] ?? ""), content: String(r["내용"] ?? "") })) });
+    const rows = XLSX.utils.sheet_to_json<SheetRow>(workbook.Sheets[workbook.SheetNames[0]]);
+    await importRecords({ sessionToken: session.token, subjectId: selectedSubjectId as Id<"subjects">, records: rows.map((r) => ({ classNumber: Number(r["반"]), studentNumber: Number(r["번호"]), name: String(r["이름"] ?? ""), content: String(r["내용"] ?? "") })) });
     notify(`${rows.length}건의 기록을 불러왔습니다.`);
   };
   return <section className="settings-card">
@@ -582,27 +698,33 @@ function SubjectsSettings({ session, notify }: { session: Session; notify: (s: s
     <div className="subject-list">{subjects?.map((subject) => <SubjectRow key={subject._id} subject={subject} session={session} onRemove={async () => { try { await removeSubject({ sessionToken: session.token, subjectId: subject._id }); notify("과목을 삭제했습니다."); } catch (e) { notify(e instanceof Error ? e.message : "기록이 있는 과목은 삭제할 수 없습니다."); } }} notify={notify} />)}</div>
     <div className="excel-zone">
       <div><FileSpreadsheet size={23} /><span><b>과목별 기록 엑셀 관리</b><small>선택한 과목의 기록만 불러오거나 내보냅니다.</small></span></div>
-      <select value={selected} onChange={(e) => setSelected(e.target.value)} aria-label="과목 선택">{subjects?.map((s) => <option key={s._id} value={s._id}>{s.label}</option>)}</select>
+      <select value={selectedSubjectId} onChange={(e) => setSelected(e.target.value)} aria-label="과목 선택">{subjects?.map((s) => <option key={s._id} value={s._id}>{s.label}</option>)}</select>
       <input ref={fileRef} hidden type="file" accept=".xlsx,.xls" onChange={(e) => importFile(e.target.files?.[0])} />
-      <button className="outline-button" disabled={!selected} onClick={() => fileRef.current?.click()}><Upload size={16} /> 불러오기</button>
+      <button className="outline-button" disabled={!selectedSubjectId} onClick={() => fileRef.current?.click()}><Upload size={16} /> 불러오기</button>
       <button className="outline-button" onClick={() => downloadWorkbook([{ 반: 1, 번호: 1, 이름: "홍길동", 내용: "생활기록부 내용을 입력하세요." }], "생활기록부_샘플.xlsx", "생활기록부", ["반", "번호", "이름", "내용"])}><FileDown size={16} /> 샘플</button>
-      <button className="dark-button" disabled={!selected || exportRows === undefined} onClick={() => {
-        const rows = (exportRows ?? []).filter((r) => r.subjectId === selected).map((r) => toRecordExportRow({
-          classNumber: r.classNumber,
-          studentNumber: r.studentNumber,
-          studentName: r.studentName,
-          subjectLabel: selectedSubject?.label ?? "",
-          content: r.content,
-          updatedAt: r.updatedAt,
-        }));
-        downloadWorkbook(rows, `${selectedSubject?.label ?? "과목"}_생활기록부.xlsx`, selectedSubject?.label ?? "생활기록부", RECORD_EXPORT_HEADERS);
-        notify(`${selectedSubject?.label ?? "선택한 과목"} 기록을 Excel로 내보냈습니다.`);
-      }}><Download size={16} /> 내보내기</button>
+      <button className="dark-button" disabled={!selectedSubjectId || exporting} onClick={async () => {
+        setExporting(true);
+        try {
+          const exportRows = await convex.query(api.admin.exportRecords, { sessionToken: session.token });
+          const rows = exportRows.filter((r) => r.subjectId === selectedSubjectId).map((r) => toRecordExportRow({
+            classNumber: r.classNumber,
+            studentNumber: r.studentNumber,
+            studentName: r.studentName,
+            subjectLabel: selectedSubject?.label ?? "",
+            content: r.content,
+            updatedAt: r.updatedAt,
+          }));
+          downloadWorkbook(rows, `${selectedSubject?.label ?? "과목"}_생활기록부.xlsx`, selectedSubject?.label ?? "생활기록부", RECORD_EXPORT_HEADERS);
+          notify(`${selectedSubject?.label ?? "선택한 과목"} 기록을 Excel로 내보냈습니다.`);
+        } finally {
+          setExporting(false);
+        }
+      }}><Download size={16} /> {exporting ? "내보내는 중…" : "내보내기"}</button>
     </div>
   </section>;
 }
 
-function SubjectRow({ subject, session, onRemove, notify }: { subject: any; session: Session; onRemove: () => void; notify: (s: string) => void }) {
+function SubjectRow({ subject, session, onRemove, notify }: { subject: SubjectAdminRow; session: Session; onRemove: () => void; notify: (s: string) => void }) {
   const upsert = useMutation(api.admin.upsertSubject);
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(subject.label);
