@@ -32,16 +32,21 @@ function decodeBase64(value: string) {
 
 const CP949_DOUBLE_BYTE = decodeBase64(CP949_DOUBLE_BYTE_BASE64);
 
+// The production Excel reference counts U+00B7 MIDDLE DOT as single-byte.
+// This exception is what makes the 636-character reference record 1,494 bytes.
+const EXCEL_SINGLE_BYTE_OVERRIDES = new Set([0x00b7]);
+
 function isCp949DoubleByte(codePoint: number) {
   return codePoint <= 0xffff
+    && !EXCEL_SINGLE_BYTE_OVERRIDES.has(codePoint)
     && (CP949_DOUBLE_BYTE[codePoint >> 3] & (1 << (codePoint & 7))) !== 0;
 }
 
 /**
  * Excel LENB-compatible byte count for Korean Windows Excel.
  *
- * CP949 double-byte characters count as 2. ASCII and characters that CP949
- * replaces with a one-byte question mark count as 1.
+ * CP949 double-byte characters count as 2, except for Excel/NEIS single-byte
+ * compatibility overrides. ASCII and unsupported characters count as 1.
  */
 export function excelLenB(text: string) {
   let bytes = 0;
