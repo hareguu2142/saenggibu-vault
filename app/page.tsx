@@ -406,7 +406,7 @@ function matchesRecord(record: RecordListRow, filters: Filters, includeContent: 
   return (!filters.className || String(record.classNumber).includes(filters.className))
     && (!filters.number || String(record.studentNumber).includes(filters.number))
     && (!filters.name || record.studentName.toLowerCase().includes(filters.name.toLowerCase()))
-    && (!filters.subject || record.subjectLabel.toLowerCase().includes(filters.subject.toLowerCase()))
+    && (!filters.subject || record.subjectLabel === filters.subject)
     && (!includeContent || !filters.content || String(record.content ?? "").toLowerCase().includes(filters.content.toLowerCase()));
 }
 
@@ -441,6 +441,11 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
     if (!source) return undefined;
     return source.filter((record) => matchesRecord(record, filters, session.role === "student"));
   }, [filters, mine, session.role, teacherSource]);
+  const subjectOptions = useMemo(() => {
+    const source = session.role === "teacher" ? summaries : mine;
+    return [...new Set((source ?? []).map((record) => record.subjectLabel).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "ko"));
+  }, [mine, session.role, summaries]);
   const searchPending = session.role === "teacher" && filters.content.trim() !== debouncedContent;
 
   const copy = async (event: MouseEvent, content: string) => {
@@ -478,7 +483,7 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
       notify("Excel 파일을 만들지 못했습니다.");
     }
   };
-  const fields: Array<[keyof Filters, string, string]> = [["className", "반", "예: 1"], ["number", "번호", "예: 12"], ["name", "이름", "학생 이름"], ["subject", "과목", "과목명"], ["content", "내용", "내용에서 검색"]];
+  const fields: Array<[keyof Filters, string, string]> = [["className", "반", "예: 1"], ["number", "번호", "예: 12"], ["name", "이름", "학생 이름"]];
   return (
     <div className="page-container">
       <div className="page-heading">
@@ -492,6 +497,8 @@ function RecordsView({ session, onOpen, notify }: { session: Session; onOpen: (i
         <div className="search-title"><Search size={18} /><b>기록 검색</b><span>{session.role === "teacher" ? "이름·과목은 브라우저에서, 내용은 검색 인덱스에서 찾습니다." : "내 기록 안에서 빠르게 찾아보세요."}</span></div>
         <div className="filter-grid">
           {fields.map(([key, label, placeholder]) => <label key={key}><span>{label}</span><input value={filters[key]} onChange={(e) => setFilters({ ...filters, [key]: e.target.value })} placeholder={placeholder} /></label>)}
+          <label><span>과목</span><select value={filters.subject} onChange={(e) => setFilters({ ...filters, subject: e.target.value })} aria-label="과목 선택"><option value="">전체 과목</option>{subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}</select></label>
+          <label><span>내용</span><input value={filters.content} onChange={(e) => setFilters({ ...filters, content: e.target.value })} placeholder="내용에서 검색" /></label>
           <button className="clear-button" onClick={() => setFilters(EMPTY_FILTERS)}><X size={15} /> 초기화</button>
         </div>
         <div className="table-wrap">
