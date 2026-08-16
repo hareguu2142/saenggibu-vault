@@ -1,14 +1,8 @@
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { neatBytes } from "../lib/neisBytes";
 
 type ReadCtx = QueryCtx | MutationCtx;
-
-export function neatBytes(content: string) {
-  const chars = Array.from(content).length;
-  let lenB = 0;
-  for (const ch of content) lenB += (ch.codePointAt(0) ?? 0) <= 0x7f ? 1 : 2;
-  return 2 * lenB - chars;
-}
 
 export async function buildRecordSummary(ctx: ReadCtx, record: Doc<"records">) {
   const student = await ctx.db.get(record.studentId);

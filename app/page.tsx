@@ -8,6 +8,7 @@ import {
 import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { neatBytes } from "@/lib/neisBytes";
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
@@ -67,13 +68,6 @@ type SheetRow = Record<string, unknown>;
 
 const RECORD_EXPORT_HEADERS = ["반", "번호", "이름", "내용", "나이스 바이트", "마지막 수정"];
 type DiffPart = { kind: "same" | "removed" | "added"; text: string };
-
-const neatBytes = (text: string) => {
-  const chars = Array.from(text).length;
-  let lenB = 0;
-  for (const ch of text) lenB += (ch.codePointAt(0) ?? 0) <= 0x7f ? 1 : 2;
-  return 2 * lenB - chars;
-};
 
 const safeFileName = (value: string) => value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "생활기록부.xlsx";
 const safeSheetName = (value: string) => value.replace(/[:\\/?*\[\]]/g, "_").trim().slice(0, 31) || "생활기록부";

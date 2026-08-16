@@ -55,7 +55,7 @@ export const ensureSummaries = mutation({
   args: { sessionToken: v.string() },
   handler: async (ctx, { sessionToken }) => {
     await requireTeacher(ctx, sessionToken);
-    const markerKey = "record-summaries-v1";
+    const markerKey = "record-summaries-excel-lenb-v2";
     const marker = await ctx.db.query("appState").withIndex("by_key", (q) => q.eq("key", markerKey)).unique();
     if (marker?.value === "complete") return { created: 0, alreadyComplete: true };
     const records = await ctx.db.query("records").collect();
